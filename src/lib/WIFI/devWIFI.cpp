@@ -103,12 +103,20 @@ static bool target_complete = false;
 static bool force_update = false;
 static uint32_t totalSize;
 
+unsigned long lastWifiActivityTime = 0;
+
+void checkWifiActivity()
+{
+  if ( (millis() - lastWifiActivityTime) > 180000UL) ESP.restart();
+}
+
 void setWifiUpdateMode()
 {
   // No need to ExitBindingMode(), the radio will be stopped stopped when start the Wifi service.
   // Need to change this before the mode change event so the LED is updated
   InBindingMode = false;
   connectionState = wifiUpdate;
+  lastWifiActivityTime = millis();
 }
 
 /** Is this an IP? */
@@ -184,6 +192,7 @@ static void WebUpdateSendContent(AsyncWebServerRequest *request)
 
 static void WebUpdateHandleRoot(AsyncWebServerRequest *request)
 {
+  lastWifiActivityTime = millis();
   if (captivePortal(request))
   { // If captive portal redirect instead of displaying the page.
     return;
@@ -700,6 +709,7 @@ static void corsPreflightResponse(AsyncWebServerRequest *request) {
 }
 
 static void WebUploadResponseHandler(AsyncWebServerRequest *request) {
+  lastWifiActivityTime = millis();
   if (target_seen || Update.hasError()) {
     String msg;
     if (!Update.hasError() && Update.end()) {
@@ -738,6 +748,7 @@ static void WebUploadResponseHandler(AsyncWebServerRequest *request) {
 }
 
 static void WebUploadDataHandler(AsyncWebServerRequest *request, const String& filename, size_t index, uint8_t *data, size_t len, bool final) {
+  lastWifiActivityTime = millis();
   force_update = force_update || request->hasArg("force");
   if (index == 0) {
     #ifdef HAS_WIFI_JOYSTICK
