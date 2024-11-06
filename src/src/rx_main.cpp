@@ -575,10 +575,10 @@ bool ICACHE_RAM_ATTR HandleSendTelemetryResponse()
     return true;
 }
 
-int32_t ICACHE_RAM_ATTR HandleFreqCorr(bool value)
+int32_t ICACHE_RAM_ATTR HandleFreqCorr(bool value, SX12XX_Radio_Number_t radio)
 {
     int32_t tempFC = FreqCorrection;
-    if (Radio.GetProcessingPacketRadio() == SX12XX_Radio_2)
+    if (radio == SX12XX_Radio_2)
     {
         tempFC = FreqCorrection_2;
     }
@@ -606,7 +606,7 @@ int32_t ICACHE_RAM_ATTR HandleFreqCorr(bool value)
         }
     }
 
-    if (Radio.GetProcessingPacketRadio() == SX12XX_Radio_1)
+    if (radio == SX12XX_Radio_1)
     {
         FreqCorrection = tempFC;
     }
@@ -814,7 +814,6 @@ void ICACHE_RAM_ATTR HWtimerCallbackTock()
     }
     didFHSS = false;
 
-    Radio.isFirstRxIrq = true;
     updateDiversity();
     tlmSent = HandleSendTelemetryResponse();
 
@@ -1107,6 +1106,8 @@ bool ICACHE_RAM_ATTR ProcessRFPacket(SX12xxDriverCommon::rx_status const status)
     uint32_t const beginProcessing = micros();
 
     OTA_Packet_s * const otaPktPtr = (OTA_Packet_s * const)Radio.RXdataBuffer;
+    OTA_Packet_s * const otaPktPtrSecond = (OTA_Packet_s * const)Radio.RXdataBufferSecond;
+
     if (!OtaValidatePacketCrc(otaPktPtr))
     {
         DBGVLN("CRC error");
@@ -1122,6 +1123,15 @@ bool ICACHE_RAM_ATTR ProcessRFPacket(SX12xxDriverCommon::rx_status const status)
     unsigned long now = millis();
 
     LastValidPacket = now;
+
+    Radio.CheckForSecondPacket();
+    if (Radio.hasSecondRadioGotData)
+    {
+        if (!OtaValidatePacketCrc(otaPktPtrSecond))
+        {
+            Radio.hasSecondRadioGotData = false;
+        }
+    }
 
     switch (otaPktPtr->std.type)
     {
@@ -1150,17 +1160,29 @@ bool ICACHE_RAM_ATTR ProcessRFPacket(SX12xxDriverCommon::rx_status const status)
     Radio.GetLastPacketStats();
     getRFlinkInfo();
 
+    // Adjusts FreqCorrection for RX freq offset
     if (Radio.FrequencyErrorAvailable())
     {
     #if defined(RADIO_SX127X)
-        // Adjusts FreqCorrection for RX freq offset
-        int32_t tempFreqCorrection = HandleFreqCorr(Radio.GetFrequencyErrorbool());
+        int32_t tempFreqCorrection = HandleFreqCorr(Radio.GetFrequencyErrorbool(Radio.GetProcessingPacketRadio()), Radio.GetProcessingPacketRadio());
         // Teamp900 also needs to adjust its demood PPM
-        Radio.SetPPMoffsetReg(tempFreqCorrection);
-    #else /* !RADIO_SX127X */
-        // Adjusts FreqCorrection for RX freq offset
-        HandleFreqCorr(Radio.GetFrequencyErrorbool());
-    #endif /* RADIO_SX127X */
+        Radio.SetPPMoffsetReg(tempFreqCorrection, Radio.GetProcessingPacketRadio());
+
+        if (Radio.hasSecondRadioGotData)
+        {
+            SX12XX_Radio_Number_t secondRadio = Radio.GetProcessingPacketRadio() == SX12XX_Radio_1 ? SX12XX_Radio_2 : SX12XX_Radio_1;
+            tempFreqCorrection = HandleFreqCorr(Radio.GetFrequencyErrorbool(secondRadio), secondRadio);
+            Radio.SetPPMoffsetReg(tempFreqCorrection, secondRadio);
+        }
+    #else
+        HandleFreqCorr(Radio.GetFrequencyErrorbool(Radio.GetProcessingPacketRadio()), Radio.GetProcessingPacketRadio());
+
+        if (Radio.hasSecondRadioGotData)
+        {
+            SX12XX_Radio_Number_t secondRadio = Radio.GetProcessingPacketRadio() == SX12XX_Radio_1 ? SX12XX_Radio_2 : SX12XX_Radio_1;
+            HandleFreqCorr(Radio.GetFrequencyErrorbool(secondRadio), secondRadio);
+        }
+    #endif
     }
 
     // Received a packet, that's the definition of LQ
